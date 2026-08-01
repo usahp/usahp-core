@@ -1,0 +1,30 @@
+[server]
+port = 7312
+client_queue_capacity = 256
+
+[simulator]
+stdin = true
+
+[[mappings]]
+id = "space"
+switch_id = "switch_1"
+input = "keyboard"
+code = "Space"
+
+# Several physical inputs may drive the same logical switch.
+[[mappings]]
+id = "enter"
+switch_id = "switch_1"
+input = "keyboard"
+code = "Return"
+
+# Linux-only example for a dedicated evdev gamepad/switch interface.
+# The whole device is grabbed exclusively, so do not select a general-purpose
+# controller that other applications must continue to use.
+# [[mappings]]
+# id = "gamepad-south"
+# switch_id = "switch_2"
+# input = "gamepad"
+# code = "304"
+# device = "/dev/input/event5"
+

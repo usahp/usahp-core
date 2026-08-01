@@ -1,0 +1,27 @@
+[package]
+name = "usahp-daemon"
+description = "Cross-platform local switch-event broker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+futures-util.workspace = true
+rdev = { version = "0.5.3", features = ["unstable_grab"] }
+serde_json.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+usahp-core.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+evdev = "0.13"
+
+[[bin]]
+name = "usahpd"
+path = "src/main.rs"
