@@ -169,6 +169,7 @@ fn spawn_gamepads(mappings: &[Mapping], broker: mpsc::Sender<BrokerCommand>) -> 
 
     for (path, codes) in by_device {
         let broker = broker.clone();
+        let error_path = path.clone();
         std::thread::Builder::new()
             .name(format!("usahp-evdev-{path}"))
             .spawn(move || {
@@ -218,7 +219,7 @@ fn spawn_gamepads(mappings: &[Mapping], broker: mpsc::Sender<BrokerCommand>) -> 
                     }
                 }
             })
-            .with_context(|| format!("could not start gamepad thread for {path}"))?;
+            .with_context(|| format!("could not start gamepad thread for {error_path}"))?;
     }
     Ok(())
 }
