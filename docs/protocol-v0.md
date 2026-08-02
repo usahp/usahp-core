@@ -1,5 +1,7 @@
 # USAHP Event Broker Protocol 0.1
 
+This page is the canonical contract for USAHP protocol version `0.1`.
+
 ## Purpose
 
 Protocol 0.1 lets local applications observe normalized switch edges from one daemon. It is a passive broadcast protocol at the client boundary: every connected client receives the same logical events, while hardware capture and suppression remain daemon responsibilities.
