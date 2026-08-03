@@ -1,7 +1,7 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 
 use tokio::{
-    sync::{mpsc, oneshot},
+    sync::{mpsc, oneshot, watch},
     time::Instant,
 };
 use tracing::{debug, info, warn};
@@ -12,7 +12,10 @@ use usahp_core::{
 };
 use uuid::Uuid;
 
-use crate::input::CaptureControl;
+use crate::{
+    input::CaptureControl,
+    management::{ActiveSessionSnapshot, BrokerSnapshot, ConnectionSnapshot, RequestOutcome},
+};
 
 pub const HEARTBEAT_INTERVAL_MS: u32 = 500;
 pub const MISSED_HEARTBEAT_LIMIT: u32 = 3;
@@ -35,6 +38,11 @@ pub enum BrokerCommand {
         sender: mpsc::Sender<Arc<ServerMessage>>,
         reply: oneshot::Sender<u64>,
     },
+    RegisterClient {
+        sender: mpsc::Sender<Arc<ServerMessage>>,
+        peer: SocketAddr,
+        reply: oneshot::Sender<u64>,
+    },
     Unregister(u64),
     Handshake {
         client_id: u64,
@@ -50,13 +58,28 @@ pub enum BrokerCommand {
     FocusChanged {
         frontmost_pid: Option<u32>,
     },
+    SetRunning {
+        running: bool,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
 }
 
 struct Session {
     client_id: u64,
     session_id: String,
     pid: Option<u32>,
+    app_id: String,
+    requested_mode: String,
     last_heartbeat: Instant,
+}
+
+struct ClientRecord {
+    sender: mpsc::Sender<Arc<ServerMessage>>,
+    peer: Option<SocketAddr>,
+    app_id: Option<String>,
+    pid: Option<u32>,
+    requested_mode: Option<String>,
+    outcome: Option<RequestOutcome>,
 }
 
 struct Runtime {
@@ -65,24 +88,44 @@ struct Runtime {
     started: Instant,
     sequence: u64,
     next_client: u64,
-    clients: HashMap<u64, mpsc::Sender<Arc<ServerMessage>>>,
+    clients: HashMap<u64, ClientRecord>,
     session: Option<Session>,
     paused: bool,
     /// Per-switch press timestamps for escape-hatch monitoring. Entries
     /// exist while a switch is physically held; removed on release.
     escape_tracker: HashMap<String, Instant>,
+    snapshots: watch::Sender<BrokerSnapshot>,
+}
+
+pub struct BrokerHandle {
+    pub commands: mpsc::Sender<BrokerCommand>,
+    pub snapshots: watch::Receiver<BrokerSnapshot>,
 }
 
 pub fn spawn(mappings: Vec<Mapping>, capture: CaptureControl) -> mpsc::Sender<BrokerCommand> {
+    spawn_managed(mappings, capture).commands
+}
+
+pub fn spawn_managed(mappings: Vec<Mapping>, capture: CaptureControl) -> BrokerHandle {
     let (sender, receiver) = mpsc::channel(1024);
-    tokio::spawn(run(receiver, mappings, capture));
-    sender
+    let (snapshots, receiver_snapshots) = watch::channel(BrokerSnapshot {
+        capture_enabled: capture.enabled(),
+        switches: SwitchStateMachine::new(&mappings).snapshots(),
+        connections: Vec::new(),
+        active_session: None,
+    });
+    tokio::spawn(run(receiver, mappings, capture, snapshots));
+    BrokerHandle {
+        commands: sender,
+        snapshots: receiver_snapshots,
+    }
 }
 
 async fn run(
     mut receiver: mpsc::Receiver<BrokerCommand>,
     mappings: Vec<Mapping>,
     capture: CaptureControl,
+    snapshots: watch::Sender<BrokerSnapshot>,
 ) {
     let mut runtime = Runtime {
         state: SwitchStateMachine::new(&mappings),
@@ -94,6 +137,7 @@ async fn run(
         session: None,
         paused: false,
         escape_tracker: HashMap::new(),
+        snapshots,
     };
     let mut ticker = tokio::time::interval(Duration::from_millis(100));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -103,7 +147,8 @@ async fn run(
             command = receiver.recv() => {
                 let Some(command) = command else { break; };
                 match command {
-                    BrokerCommand::Register { sender, reply } => runtime.register(sender, reply),
+                    BrokerCommand::Register { sender, reply } => runtime.register(sender, None, reply),
+                    BrokerCommand::RegisterClient { sender, peer, reply } => runtime.register(sender, Some(peer), reply),
                     BrokerCommand::Unregister(client_id) => runtime.unregister(client_id).await,
                     BrokerCommand::Input(event) => runtime.input(event).await,
                     BrokerCommand::Handshake { client_id, handshake } => {
@@ -128,6 +173,10 @@ async fn run(
                         if needs_revoke {
                             runtime.revoke(SessionRevocationReason::FocusLost).await;
                         }
+                    }
+                    BrokerCommand::SetRunning { running, reply } => {
+                        let result = runtime.set_running(running).await;
+                        let _ = reply.send(result.map_err(|error| error.to_string()));
                     }
                 }
             }
@@ -167,7 +216,12 @@ async fn run(
 }
 
 impl Runtime {
-    fn register(&mut self, sender: mpsc::Sender<Arc<ServerMessage>>, reply: oneshot::Sender<u64>) {
+    fn register(
+        &mut self,
+        sender: mpsc::Sender<Arc<ServerMessage>>,
+        peer: Option<SocketAddr>,
+        reply: oneshot::Sender<u64>,
+    ) {
         let client_id = self.next_client;
         self.next_client += 1;
         let hello = Arc::new(ServerMessage::Hello(Hello {
@@ -175,8 +229,19 @@ impl Runtime {
             switches: self.state.snapshots(),
         }));
         if sender.try_send(hello).is_ok() {
-            self.clients.insert(client_id, sender);
+            self.clients.insert(
+                client_id,
+                ClientRecord {
+                    sender,
+                    peer,
+                    app_id: None,
+                    pid: None,
+                    requested_mode: None,
+                    outcome: None,
+                },
+            );
             let _ = reply.send(client_id);
+            self.publish_snapshot();
         }
     }
 
@@ -191,6 +256,7 @@ impl Runtime {
             self.revoke(SessionRevocationReason::ExplicitRevocation)
                 .await;
         }
+        self.publish_snapshot();
     }
 
     async fn input(&mut self, event: PhysicalEvent) {
@@ -227,7 +293,7 @@ impl Runtime {
                     let failed = self
                         .clients
                         .get(&client_id)
-                        .is_none_or(|sender| sender.try_send(message).is_err());
+                        .is_none_or(|client| client.sender.try_send(message).is_err());
                     if failed {
                         self.clients.remove(&client_id);
                         warn!(client_id, "managed session queue overflowed");
@@ -236,6 +302,7 @@ impl Runtime {
                 } else {
                     self.broadcast(message);
                 }
+                self.publish_snapshot();
             }
             Ok(None) => {}
             Err(error) => debug!(%error, "ignored invalid or stale physical transition"),
@@ -243,6 +310,12 @@ impl Runtime {
     }
 
     async fn handshake(&mut self, client_id: u64, handshake: Handshake) {
+        if let Some(client) = self.clients.get_mut(&client_id) {
+            client.app_id = Some(handshake.app_id.clone());
+            client.pid = handshake.pid;
+            client.requested_mode = Some(String::from(handshake.requested_mode.clone()));
+            client.outcome = None;
+        }
         let rejection = if handshake.protocol_version != PROTOCOL_VERSION {
             Some(HandshakeRejectionReason::ProtocolMismatch)
         } else if !valid_app_id(&handshake.app_id) {
@@ -255,6 +328,11 @@ impl Runtime {
             None
         };
         if let Some(reason) = rejection {
+            if let Some(client) = self.clients.get_mut(&client_id) {
+                client.outcome = Some(RequestOutcome::Rejected {
+                    reason: format!("{reason:?}"),
+                });
+            }
             self.send_response(
                 client_id,
                 HandshakeResponse::Rejected {
@@ -262,6 +340,7 @@ impl Runtime {
                     reason,
                 },
             );
+            self.publish_snapshot();
             return;
         }
 
@@ -276,6 +355,12 @@ impl Runtime {
                     reason: HandshakeRejectionReason::CaptureUnavailable,
                 },
             );
+            if let Some(client) = self.clients.get_mut(&client_id) {
+                client.outcome = Some(RequestOutcome::Rejected {
+                    reason: "CaptureUnavailable".into(),
+                });
+            }
+            self.publish_snapshot();
             return;
         }
 
@@ -301,8 +386,13 @@ impl Runtime {
             client_id,
             session_id: session_id.clone(),
             pid: handshake.pid,
+            app_id: handshake.app_id,
+            requested_mode: String::from(handshake.requested_mode),
             last_heartbeat: Instant::now(),
         });
+        if let Some(client) = self.clients.get_mut(&client_id) {
+            client.outcome = Some(RequestOutcome::Accepted);
+        }
         let accepted = self.send_response(
             client_id,
             HandshakeResponse::Accepted {
@@ -317,6 +407,7 @@ impl Runtime {
             return;
         }
         info!(client_id, "managed session accepted");
+        self.publish_snapshot();
     }
 
     async fn revoke(&mut self, reason: SessionRevocationReason) {
@@ -333,11 +424,12 @@ impl Runtime {
         self.paused = true;
         let releases = self.release_messages();
         let mut delivery_failed = false;
-        if let Some(sender) = self.clients.get(&session.client_id) {
+        if let Some(client) = self.clients.get(&session.client_id) {
             for release in releases {
-                delivery_failed |= sender.try_send(release).is_err();
+                delivery_failed |= client.sender.try_send(release).is_err();
             }
-            delivery_failed |= sender
+            delivery_failed |= client
+                .sender
                 .try_send(Arc::new(ServerMessage::SessionRevoked(SessionRevoked {
                     protocol_version: PROTOCOL_VERSION.into(),
                     session_id: session.session_id,
@@ -353,6 +445,7 @@ impl Runtime {
             ?reason,
             "managed session revoked"
         );
+        self.publish_snapshot();
     }
 
     fn release_messages(&mut self) -> Vec<Arc<ServerMessage>> {
@@ -387,8 +480,9 @@ impl Runtime {
     }
 
     fn send_response(&mut self, client_id: u64, response: HandshakeResponse) -> bool {
-        let sent = self.clients.get(&client_id).is_some_and(|sender| {
-            sender
+        let sent = self.clients.get(&client_id).is_some_and(|client| {
+            client
+                .sender
                 .try_send(Arc::new(ServerMessage::HandshakeResponse(response)))
                 .is_ok()
         });
@@ -399,14 +493,67 @@ impl Runtime {
     }
 
     fn broadcast(&mut self, message: Arc<ServerMessage>) {
-        self.clients
-            .retain(|client_id, sender| match sender.try_send(message.clone()) {
+        self.clients.retain(
+            |client_id, client| match client.sender.try_send(message.clone()) {
                 Ok(()) => true,
                 Err(error) => {
                     warn!(client_id, %error, "disconnecting slow or closed passive client");
                     false
                 }
-            });
+            },
+        );
+    }
+
+    async fn set_running(&mut self, running: bool) -> anyhow::Result<()> {
+        if running {
+            self.capture.resume().await?;
+            self.paused = false;
+        } else {
+            if self.session.is_some() {
+                self.revoke(SessionRevocationReason::ExplicitRevocation)
+                    .await;
+            } else {
+                self.capture.pause().await?;
+                self.paused = true;
+                let releases = self.release_messages();
+                for release in releases {
+                    self.broadcast(release);
+                }
+            }
+            self.clients.clear();
+            self.escape_tracker.clear();
+        }
+        self.publish_snapshot();
+        Ok(())
+    }
+
+    fn publish_snapshot(&self) {
+        let mut connections: Vec<_> = self
+            .clients
+            .iter()
+            .map(|(&client_id, client)| ConnectionSnapshot {
+                client_id,
+                peer: client.peer.map(|peer| peer.to_string()),
+                app_id: client.app_id.clone(),
+                pid: client.pid,
+                requested_mode: client.requested_mode.clone(),
+                outcome: client.outcome.clone(),
+            })
+            .collect();
+        connections.sort_by_key(|client| client.client_id);
+        let active_session = self.session.as_ref().map(|session| ActiveSessionSnapshot {
+            client_id: session.client_id,
+            app_id: session.app_id.clone(),
+            pid: session.pid,
+            requested_mode: session.requested_mode.clone(),
+            session_id: session.session_id.clone(),
+        });
+        self.snapshots.send_replace(BrokerSnapshot {
+            capture_enabled: self.capture.enabled(),
+            switches: self.state.snapshots(),
+            connections,
+            active_session,
+        });
     }
 }
 
@@ -1097,5 +1244,108 @@ mod tests {
             !revoked,
             "stale escape_tracker entry from passive mode should not fire on new session"
         );
+    }
+
+    #[tokio::test]
+    async fn managed_snapshot_tracks_requests_and_live_connections() {
+        let handle = spawn_managed(vec![mapping("a", "switch_1")], CaptureControl::default());
+        let broker = handle.commands;
+        let mut snapshots = handle.snapshots;
+        let (first_id, mut first_rx) = register(&broker, 8).await;
+        first_rx.recv().await.unwrap();
+        snapshots.changed().await.unwrap();
+        assert_eq!(snapshots.borrow().connections.len(), 1);
+        assert!(snapshots.borrow().connections[0].app_id.is_none());
+
+        broker
+            .send(BrokerCommand::Handshake {
+                client_id: first_id,
+                handshake: handshake_with_pid("org.example.first", 4242),
+            })
+            .await
+            .unwrap();
+        first_rx.recv().await.unwrap();
+        snapshots.changed().await.unwrap();
+        let snapshot = snapshots.borrow().clone();
+        assert_eq!(snapshot.active_session.unwrap().app_id, "org.example.first");
+        assert_eq!(snapshot.connections[0].pid, Some(4242));
+        assert_eq!(
+            snapshot.connections[0].outcome,
+            Some(RequestOutcome::Accepted)
+        );
+
+        let (second_id, mut second_rx) = register(&broker, 8).await;
+        second_rx.recv().await.unwrap();
+        snapshots.changed().await.unwrap();
+        broker
+            .send(BrokerCommand::Handshake {
+                client_id: second_id,
+                handshake: handshake("org.example.second"),
+            })
+            .await
+            .unwrap();
+        second_rx.recv().await.unwrap();
+        snapshots.changed().await.unwrap();
+        let snapshot = snapshots.borrow().clone();
+        let second = snapshot
+            .connections
+            .iter()
+            .find(|client| client.client_id == second_id)
+            .unwrap();
+        assert!(matches!(
+            second.outcome,
+            Some(RequestOutcome::Rejected { ref reason }) if reason == "SessionBusy"
+        ));
+
+        broker
+            .send(BrokerCommand::Unregister(second_id))
+            .await
+            .unwrap();
+        snapshots.changed().await.unwrap();
+        assert_eq!(snapshots.borrow().connections.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn stop_releases_state_clears_clients_and_can_restart() {
+        let capture = CaptureControl::default();
+        let handle = spawn_managed(vec![mapping("a", "switch_1")], capture.clone());
+        let broker = handle.commands;
+        let snapshots = handle.snapshots;
+        let (_client_id, mut rx) = register(&broker, 8).await;
+        rx.recv().await.unwrap();
+        broker
+            .send(BrokerCommand::Input(PhysicalEvent {
+                mapping_id: "a".into(),
+                action: Action::Pressed,
+                confidence: Some(100.0),
+            }))
+            .await
+            .unwrap();
+        rx.recv().await.unwrap();
+        assert_eq!(snapshots.borrow().switches[0].state, SwitchState::Pressed);
+
+        let (reply, result) = oneshot::channel();
+        broker
+            .send(BrokerCommand::SetRunning {
+                running: false,
+                reply,
+            })
+            .await
+            .unwrap();
+        result.await.unwrap().unwrap();
+        assert!(!capture.enabled());
+        assert!(snapshots.borrow().connections.is_empty());
+        assert_eq!(snapshots.borrow().switches[0].state, SwitchState::Released);
+
+        let (reply, result) = oneshot::channel();
+        broker
+            .send(BrokerCommand::SetRunning {
+                running: true,
+                reply,
+            })
+            .await
+            .unwrap();
+        result.await.unwrap().unwrap();
+        assert!(capture.enabled());
     }
 }

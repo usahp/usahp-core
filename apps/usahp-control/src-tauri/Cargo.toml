@@ -1,0 +1,26 @@
+[package]
+name = "usahp-control"
+description = "Tray utility for supervising the USAHP local switch service"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "usahp_control_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+tauri = { version = "2.11.5", features = ["tray-icon"] }
+tauri-plugin-dialog = "2.7.2"
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+usahp-daemon = { path = "../../../crates/usahp-daemon" }
+usahp-core.workspace = true

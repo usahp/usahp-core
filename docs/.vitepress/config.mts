@@ -54,6 +54,7 @@ export default defineConfig({
         text: 'Use USAHP',
         items: [
           { text: 'Configuration', link: '/configuration' },
+          { text: 'USAHP Control utility', link: '/control' },
           { text: 'Client integration', link: '/clients' },
           { text: 'Platform requirements', link: '/platforms' },
           { text: 'Simulator and testing', link: '/simulator' }
