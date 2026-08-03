@@ -46,7 +46,7 @@ The broker implements one local `exclusive_foreground` session without checking 
 
 The current wire format carries `100.0` for a binary press and `0.0` for a release. It does not yet carry continuous analog samples from BCI, facial-gesture, pressure, or similar sources.
 
-The final confidence model is intentionally open. Its units, range, unknown state, sampling, snapshots, and protocol version will be designed in [issue #6](https://github.com/OwenMcGirr/usahp/issues/6). Applications will continue to own threshold and activation policy.
+The final confidence model is intentionally open. Its units, range, unknown state, sampling, snapshots, and protocol version will be designed in [issue #6](https://github.com/usahp/usahp-core/issues/6). Applications will continue to own threshold and activation policy.
 
 ## Platform ideas
 

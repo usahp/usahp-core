@@ -30,7 +30,7 @@ An implementation of this future standard would normalize physical and virtual s
 
 > * **Switch ID:** A normalized string (e.g., switch\_1, switch\_2).  
 > * **Action Event:** A discrete payload representing a specific state change in the event lifecycle: pressed (leading edge), released (trailing edge), or held (sustained input). The OS-SD MUST NOT group these into a single click; they MUST be emitted as separate events (See Section 6.3).  
-> * **Confidence Score:** A provisional analog value. The final units, range, absence semantics, sampling model, and snapshot representation remain open in [issue #6](https://github.com/OwenMcGirr/usahp/issues/6). Physical binary switches currently emit interim values of 100.0 and 0.0.
+> * **Confidence Score:** A provisional analog value. The final units, range, absence semantics, sampling model, and snapshot representation remain open in [issue #6](https://github.com/usahp/usahp-core/issues/6). Physical binary switches currently emit interim values of 100.0 and 0.0.
 
 ### **3.2 Part 2: The Handoff Protocol (Software)**
 
@@ -137,7 +137,7 @@ To support this, the OS-SD MUST NOT send a single consolidated "click" event. In
 ### **6.4 Analog Inputs and Confidence Scores**
 
 Traditional physical switches are binary. However, modern AAC relies heavily on Machine Learning (ML) systems, facial gesture recognition (e.g., Apple ARKit face tracking), and Brain-Computer Interfaces (BCI). These inputs are not binary; they operate on probability.  
-The draft reserves space for confidence so physical and virtual switches do not require unrelated APIs. The final representation is deliberately unresolved; [issue #6](https://github.com/OwenMcGirr/usahp/issues/6) owns that design.
+The draft reserves space for confidence so physical and virtual switches do not require unrelated APIs. The final representation is deliberately unresolved; [issue #6](https://github.com/usahp/usahp-core/issues/6) owns that design.
 
 #### **6.4.1 Physical Switches (Binary)**
 
