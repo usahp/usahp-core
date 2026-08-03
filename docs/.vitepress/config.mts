@@ -43,7 +43,10 @@ export default defineConfig({
         text: 'Start here',
         items: [
           { text: 'Overview', link: '/' },
+          { text: 'How it fits together', link: '/ecosystem' },
           { text: 'Architecture', link: '/architecture' },
+          { text: 'Demo app', link: '/demo' },
+          { text: 'Roadmap', link: '/roadmap' },
           { text: 'Quick start', link: '/quick-start' }
         ]
       },

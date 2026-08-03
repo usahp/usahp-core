@@ -55,6 +55,11 @@ pub fn spawn_stdin(broker: mpsc::Sender<BrokerCommand>, mappings: &[Mapping]) {
                 .blocking_send(BrokerCommand::Input(PhysicalEvent {
                     mapping_id: mapping_id.clone(),
                     action,
+                    confidence: Some(if action == Action::Pressed {
+                        100.0
+                    } else {
+                        0.0
+                    }),
                 }))
                 .is_err()
             {

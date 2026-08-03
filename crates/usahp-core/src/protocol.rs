@@ -1,6 +1,27 @@
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: &str = "0.2.0";
+pub const PROTOCOL_VERSION: &str = "0.3.0";
+
+/// Validate a confidence value: must be finite and in `[0.0, 100.0]`.
+/// Returns `Some(value)` if valid, `None` if the value is invalid (NaN, Inf,
+/// or out of range). Used at deserialization boundaries.
+pub fn validate_confidence(value: f32) -> Option<f32> {
+    if value.is_finite() && (0.0..=100.0).contains(&value) {
+        Some(value)
+    } else {
+        None
+    }
+}
+
+/// Validate an optional confidence value. `None` passes through (binary /
+/// unknown). `Some(x)` is validated via [`validate_confidence`].
+#[allow(dead_code)]
+pub fn validate_confidence_opt(value: Option<f32>) -> Option<Option<f32>> {
+    match value {
+        None => Some(None),
+        Some(v) => validate_confidence(v).map(Some),
+    }
+}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -16,13 +37,17 @@ pub enum SwitchState {
     Released,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SwitchSnapshot {
     pub switch_id: String,
     pub state: SwitchState,
+    /// Current confidence for this switch. `None` for binary sources or
+    /// when the broker has not received a confidence-bearing event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Hello {
     pub protocol_version: String,
     pub switches: Vec<SwitchSnapshot>,
@@ -35,9 +60,22 @@ pub struct SwitchEvent {
     pub monotonic_us: u64,
     pub switch_id: String,
     pub action: Action,
-    /// Interim binary confidence field. The final confidence model is tracked in issue #6.
-    #[serde(default)]
-    pub confidence: f32,
+    /// Analog activation confidence in `[0.0, 100.0]`.
+    ///
+    /// - `None` (field absent on the wire): the source does not report
+    ///   confidence. No current hardware path produces this — keyboard,
+    ///   gamepad, and simulator inputs always set `Some`.
+    /// - `Some(100.0)`: binary switch pressed — maximum confidence.
+    /// - `Some(0.0)`: binary switch released, or analog source reporting
+    ///   genuine zero. This is **distinct from `None`**: the source actively
+    ///   measured a zero probability, not "I don't know."
+    /// - `Some(45.2)`: analog source (BCI, facial gesture, pressure) reporting
+    ///   45.2% activation probability.
+    ///
+    /// Clients decide activation thresholds (e.g., only act when confidence >
+    /// 85.0). The daemon never interprets confidence — it passes it through.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -71,6 +109,7 @@ pub struct Handshake {
     pub protocol_version: String,
     pub app_id: String,
     pub requested_mode: RequestedMode,
+    pub pid: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -104,6 +143,8 @@ pub enum SessionRevocationReason {
     HeartbeatTimeout,
     QueueOverflow,
     ExplicitRevocation,
+    FocusLost,
+    EscapeHatch,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -148,12 +189,82 @@ mod tests {
             monotonic_us: 1_843_201,
             switch_id: "switch_1".into(),
             action: Action::Pressed,
-            confidence: 100.0,
+            confidence: Some(100.0),
         }))
         .unwrap();
         assert_eq!(value["type"], "switch_event");
-        assert_eq!(value["protocol_version"], "0.2.0");
+        assert_eq!(value["protocol_version"], "0.3.0");
         assert_eq!(value["action"], "pressed");
+        assert_eq!(value["confidence"], 100.0);
+    }
+
+    #[test]
+    fn confidence_none_is_absent_from_wire() {
+        let value = serde_json::to_value(SwitchEvent {
+            protocol_version: PROTOCOL_VERSION.into(),
+            sequence: 1,
+            monotonic_us: 0,
+            switch_id: "s".into(),
+            action: Action::Pressed,
+            confidence: None,
+        })
+        .unwrap();
+        assert!(
+            value.get("confidence").is_none(),
+            "None confidence must be absent from JSON"
+        );
+    }
+
+    #[test]
+    fn confidence_some_zero_is_present_on_wire() {
+        let value = serde_json::to_value(SwitchEvent {
+            protocol_version: PROTOCOL_VERSION.into(),
+            sequence: 1,
+            monotonic_us: 0,
+            switch_id: "s".into(),
+            action: Action::Released,
+            confidence: Some(0.0),
+        })
+        .unwrap();
+        assert_eq!(
+            value["confidence"], 0.0,
+            "Some(0.0) must be present — distinct from None"
+        );
+    }
+
+    #[test]
+    fn missing_confidence_deserializes_to_none() {
+        let json = r#"{"type":"switch_event","protocol_version":"0.3.0","sequence":1,"monotonic_us":0,"switch_id":"s","action":"pressed"}"#;
+        let parsed: ServerMessage = serde_json::from_str(json).unwrap();
+        let ServerMessage::SwitchEvent(ev) = parsed else {
+            panic!()
+        };
+        assert_eq!(ev.confidence, None);
+    }
+
+    #[test]
+    fn confidence_carried_through_snapshot() {
+        let snap = SwitchSnapshot {
+            switch_id: "s".into(),
+            state: SwitchState::Pressed,
+            confidence: Some(72.5),
+        };
+        let value = serde_json::to_value(&snap).unwrap();
+        assert_eq!(value["confidence"], 72.5);
+        let back: SwitchSnapshot = serde_json::from_value(value).unwrap();
+        assert_eq!(back.confidence, Some(72.5));
+    }
+
+    #[test]
+    fn validate_confidence_rejects_invalid() {
+        assert_eq!(validate_confidence(0.0), Some(0.0));
+        assert_eq!(validate_confidence(100.0), Some(100.0));
+        assert_eq!(validate_confidence(50.5), Some(50.5));
+        assert_eq!(validate_confidence(-0.1), None);
+        assert_eq!(validate_confidence(100.1), None);
+        assert_eq!(validate_confidence(f32::NAN), None);
+        assert_eq!(validate_confidence(f32::INFINITY), None);
+        assert_eq!(validate_confidence(f32::NEG_INFINITY), None);
     }
 
     #[test]

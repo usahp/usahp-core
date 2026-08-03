@@ -48,8 +48,15 @@ async fn main() -> Result<()> {
                 }
             }
             ServerMessage::SwitchEvent(event) => println!(
-                "#{:<6} +{:>10}us  {} {:?}  {:.1}%",
-                event.sequence, event.monotonic_us, event.switch_id, event.action, event.confidence
+                "#{:<6} +{:>10}us  {} {:?}  {}",
+                event.sequence,
+                event.monotonic_us,
+                event.switch_id,
+                event.action,
+                event
+                    .confidence
+                    .map(|c| format!("{c:.1}%"))
+                    .unwrap_or_else(|| "—".into())
             ),
             ServerMessage::HandshakeResponse(resp) => {
                 println!("handshake: {resp:?}")

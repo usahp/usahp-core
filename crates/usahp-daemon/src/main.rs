@@ -37,6 +37,11 @@ async fn main() -> Result<()> {
         usahp_daemon::simulator::spawn_stdin(broker.clone(), &config.mappings);
     }
 
+    #[cfg(target_os = "macos")]
+    {
+        usahp_daemon::focus_watcher::spawn(broker.clone());
+    }
+
     let listener = TcpListener::bind(config.server.address())
         .await
         .context("could not bind loopback WebSocket server")?;

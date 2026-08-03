@@ -120,6 +120,11 @@ pub fn spawn(mappings: &[Mapping], broker: mpsc::Sender<BrokerCommand>, capture:
                                 .blocking_send(BrokerCommand::Input(PhysicalEvent {
                                     mapping_id: id.clone(),
                                     action,
+                                    confidence: Some(if action == Action::Pressed {
+                                        100.0
+                                    } else {
+                                        0.0
+                                    }),
                                 }))
                                 .is_err()
                             {

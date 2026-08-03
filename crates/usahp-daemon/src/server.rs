@@ -137,6 +137,7 @@ mod tests {
             .send(BrokerCommand::Input(PhysicalEvent {
                 mapping_id: "physical".into(),
                 action: Action::Pressed,
+                confidence: Some(100.0),
             }))
             .await
             .unwrap();
@@ -176,6 +177,7 @@ mod tests {
                 protocol_version: PROTOCOL_VERSION.into(),
                 app_id: app_id.into(),
                 requested_mode: RequestedMode::ExclusiveForeground,
+                pid: None,
             })
         };
         first

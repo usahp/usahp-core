@@ -4,10 +4,11 @@ use thiserror::Error;
 
 use crate::{Action, Mapping, SwitchSnapshot, SwitchState};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct LogicalTransition {
     pub switch_id: String,
     pub action: Action,
+    pub confidence: Option<f32>,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -46,6 +47,7 @@ impl SwitchStateMachine {
         &mut self,
         mapping_id: &str,
         action: Action,
+        confidence: Option<f32>,
     ) -> Result<Option<LogicalTransition>, StateError> {
         let switch_id = self
             .mapping_to_switch
@@ -62,7 +64,11 @@ impl SwitchStateMachine {
                         action,
                     });
                 }
-                Ok((active.len() == 1).then_some(LogicalTransition { switch_id, action }))
+                Ok((active.len() == 1).then_some(LogicalTransition {
+                    switch_id,
+                    action,
+                    confidence,
+                }))
             }
             Action::Released => {
                 if !active.remove(mapping_id) {
@@ -71,9 +77,11 @@ impl SwitchStateMachine {
                         action,
                     });
                 }
-                Ok(active
-                    .is_empty()
-                    .then_some(LogicalTransition { switch_id, action }))
+                Ok(active.is_empty().then_some(LogicalTransition {
+                    switch_id,
+                    action,
+                    confidence,
+                }))
             }
         }
     }
@@ -88,6 +96,7 @@ impl SwitchStateMachine {
                 } else {
                     SwitchState::Pressed
                 },
+                confidence: None,
             })
             .collect()
     }
@@ -103,6 +112,7 @@ impl SwitchStateMachine {
                     LogicalTransition {
                         switch_id: switch_id.clone(),
                         action: Action::Released,
+                        confidence: Some(0.0),
                     }
                 })
             })
@@ -132,18 +142,38 @@ mod tests {
     #[test]
     fn many_to_one_emits_only_outer_edges() {
         let mut state = SwitchStateMachine::new(&mappings());
-        assert!(state.apply("space", Action::Pressed).unwrap().is_some());
-        assert!(state.apply("enter", Action::Pressed).unwrap().is_none());
-        assert!(state.apply("space", Action::Released).unwrap().is_none());
-        assert!(state.apply("enter", Action::Released).unwrap().is_some());
+        assert!(
+            state
+                .apply("space", Action::Pressed, None)
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            state
+                .apply("enter", Action::Pressed, None)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            state
+                .apply("space", Action::Released, None)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            state
+                .apply("enter", Action::Released, None)
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[test]
     fn rejects_duplicate_edges() {
         let mut state = SwitchStateMachine::new(&mappings());
-        state.apply("space", Action::Pressed).unwrap();
+        state.apply("space", Action::Pressed, None).unwrap();
         assert!(matches!(
-            state.apply("space", Action::Pressed),
+            state.apply("space", Action::Pressed, None),
             Err(StateError::InvalidTransition { .. })
         ));
     }
@@ -159,9 +189,9 @@ mod tests {
             device: None,
         });
         let mut state = SwitchStateMachine::new(&all);
-        state.apply("space", Action::Pressed).unwrap();
-        state.apply("enter", Action::Pressed).unwrap();
-        state.apply("z", Action::Pressed).unwrap();
+        state.apply("space", Action::Pressed, None).unwrap();
+        state.apply("enter", Action::Pressed, None).unwrap();
+        state.apply("z", Action::Pressed, None).unwrap();
         let releases = state.release_all();
         assert_eq!(releases.len(), 2);
         assert_eq!(releases[0].switch_id, "switch_0");
@@ -173,7 +203,7 @@ mod tests {
                 .all(|s| s.state == SwitchState::Released)
         );
         assert!(matches!(
-            state.apply("space", Action::Released),
+            state.apply("space", Action::Released, None),
             Err(StateError::InvalidTransition { .. })
         ));
     }
