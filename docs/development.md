@@ -33,7 +33,7 @@ Build the production site, including internal-link validation, with:
 npm run docs:build
 ```
 
-The site uses `/usahp/` as its production base path for GitHub Pages.
+The site uses `/usahp-core/` as its production base path for GitHub Pages.
 
 ## Contribution guidance
 
@@ -43,4 +43,4 @@ The site uses `/usahp/` as its production base path for GitHub Pages.
 - Add automated tests for state, ordering, queue, or serialization changes.
 - Document platform-specific permissions and manual verification for input-backend changes.
 
-Open an issue or pull request in the [GitHub repository](https://github.com/OwenMcGirr/usahp).
+Open an issue or pull request in the [GitHub repository](https://github.com/usahp/usahp-core).

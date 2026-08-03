@@ -1,16 +1,16 @@
 import { defineConfig } from 'vitepress'
 
-const repository = 'https://github.com/OwenMcGirr/usahp'
+const repository = 'https://github.com/usahp/usahp-core'
 
 export default defineConfig({
   title: 'USAHP',
   description: 'A local, cross-platform switch-event broker for applications.',
   lang: 'en-IE',
-  base: '/usahp/',
+  base: '/usahp-core/',
   cleanUrls: true,
   lastUpdated: true,
   sitemap: {
-    hostname: 'https://owenmcgirr.github.io/usahp/'
+    hostname: 'https://usahp.github.io/usahp-core/'
   },
   head: [
     ['meta', { name: 'theme-color', content: '#16845b' }],
@@ -24,7 +24,7 @@ export default defineConfig({
       ? ''
       : pageData.relativePath.replace(/(?:index)?\.md$/, '')
     return [
-      ['link', { rel: 'canonical', href: `https://owenmcgirr.github.io/usahp/${path}` }]
+      ['link', { rel: 'canonical', href: `https://usahp.github.io/usahp-core/${path}` }]
     ]
   },
   themeConfig: {

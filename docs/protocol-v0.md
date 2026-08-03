@@ -34,7 +34,7 @@ Every connection immediately receives a `hello`. A passive client that sends no 
 
 `sequence` is global and increasing for one daemon process. `monotonic_us` is microseconds since daemon startup, not wall-clock time. Many physical inputs may map to one logical switch: only the first press and final release emit events.
 
-The binary `confidence` values (`100.0` pressed, `0.0` released) are interim. The final units, absence semantics, validation, update frequency, and snapshot model remain open in [issue #6](https://github.com/OwenMcGirr/usahp/issues/6). Clients own thresholds and activation policy.
+The binary `confidence` values (`100.0` pressed, `0.0` released) are interim. The final units, absence semantics, validation, update frequency, and snapshot model remain open in [issue #6](https://github.com/usahp/usahp-core/issues/6). Clients own thresholds and activation policy.
 
 ## Managed session handshake
 

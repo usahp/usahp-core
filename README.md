@@ -1,6 +1,6 @@
 # USAHP
 
-**[Read the USAHP documentation](https://owenmcgirr.github.io/usahp/)** for setup, configuration, client integration, platform requirements, and the protocol 0.2 reference.
+**[Read the USAHP documentation](https://usahp.github.io/usahp-core/)** for setup, configuration, client integration, platform requirements, and the protocol 0.2 reference.
 
 USAHP v0 is a local, cross-platform switch-event broker. A Rust daemon suppresses configured switch inputs, normalizes them to logical `pressed` and `released` edges, and serves local applications over WebSocket. Passive clients receive legacy broadcasts; protocol 0.2 clients may establish one heartbeat-managed exclusive session.
 
@@ -57,7 +57,7 @@ The daemon binds only to `127.0.0.1` and has no authentication or TLS in v0. Pro
 
 ## Protocol
 
-Clients receive a versioned JSON hello snapshot immediately after connecting, followed by ordered switch events. See the [protocol 0.2 documentation](https://owenmcgirr.github.io/usahp/protocol-v0) for passive and managed-session contracts.
+Clients receive a versioned JSON hello snapshot immediately after connecting, followed by ordered switch events. See the [protocol 0.2 documentation](https://usahp.github.io/usahp-core/protocol-v0) for passive and managed-session contracts.
 
 ## Development
 

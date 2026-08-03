@@ -11,14 +11,14 @@ This walkthrough starts the daemon with the built-in simulator and watches the r
 ## 1. Build USAHP
 
 ```shell
-git clone https://github.com/OwenMcGirr/usahp.git
-cd usahp
+git clone https://github.com/usahp/usahp-core.git
+cd usahp-core
 cargo build --workspace
 ```
 
 ## 2. Review the configuration
 
-The repository includes [`example.toml`](https://github.com/OwenMcGirr/usahp/blob/main/example.toml). Its simulator is enabled and both `Space` and `Return` control `switch_1`.
+The repository includes [`example.toml`](https://github.com/usahp/usahp-core/blob/main/example.toml). Its simulator is enabled and both `Space` and `Return` control `switch_1`.
 
 ## 3. Start the daemon
 
