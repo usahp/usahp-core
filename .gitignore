@@ -2,6 +2,8 @@
 node_modules/
 docs/.vitepress/cache/
 docs/.vitepress/dist/
+apps/usahp-control/dist/
+apps/usahp-control/src-tauri/gen/
 *.log
 .DS_Store
 

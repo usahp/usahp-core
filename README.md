@@ -2,7 +2,9 @@
 
 **[Read the USAHP documentation](https://usahp.github.io/usahp-core/)** for setup, configuration, client integration, platform requirements, and the protocol 0.2 reference.
 
-USAHP v0 is a local, cross-platform switch-event broker. A Rust daemon suppresses configured switch inputs, normalizes them to logical `pressed` and `released` edges, and serves local applications over WebSocket. Passive clients receive legacy broadcasts; protocol 0.2 clients may establish one heartbeat-managed exclusive session.
+USAHP v0 is a local, cross-platform switch-event broker. A Rust daemon suppresses configured switch inputs, normalizes them to logical `pressed` and `released` edges, and serves local applications over WebSocket. Passive clients receive legacy broadcasts; managed clients may establish one heartbeat-managed exclusive session.
+
+The workspace also includes **USAHP Control**, a desktop tray utility that runs the same daemon runtime, displays live application/session state, and provides coordinated start, stop, and quit controls. See the [USAHP Control guide](https://usahp.github.io/usahp-core/control).
 
 This repository deliberately implements the narrow event-broker layer. It does **not** claim OS accessibility ownership, detect the foreground app, arbitrate between applications, interpret holds, or make activation decisions.
 
@@ -68,6 +70,13 @@ cargo test --workspace
 ```
 
 GitHub Actions runs these checks on Windows, macOS, and Linux. Physical input suppression still requires manual hardware testing because hosted CI runners cannot provide global input devices or desktop accessibility permissions.
+
+To develop the tray utility:
+
+```shell
+npm install
+npm run control:dev
+```
 
 ## License
 

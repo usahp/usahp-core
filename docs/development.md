@@ -1,12 +1,13 @@
 # Development
 
-USAHP is an MIT-licensed Rust workspace with three crates:
+USAHP is an MIT-licensed Rust workspace with four Rust packages:
 
 | Crate | Role |
 | --- | --- |
 | `usahp-core` | Shared configuration, protocol types, and logical state machine. |
 | `usahp-daemon` | Input backends, broker, simulator, and loopback WebSocket server. |
 | `usahp-listen` | Reference client that prints snapshots and events. |
+| `usahp-control` | Tauri tray utility that owns and supervises the daemon runtime. |
 
 ## Validate a change
 
@@ -34,6 +35,17 @@ npm run docs:build
 ```
 
 The site uses `/usahp-core/` as its production base path for GitHub Pages.
+
+## Work on USAHP Control
+
+Install the root Node dependencies, then launch the Tauri development build:
+
+```shell
+npm install
+npm run control:dev
+```
+
+Build only the TypeScript/Vite frontend with `npm run control:build`. The normal Rust workspace formatting, Clippy, and test commands also compile and validate the Tauri backend.
 
 ## Contribution guidance
 

@@ -1,13 +1,20 @@
 {
-  "name": "usahp-docs",
+  "name": "usahp-workspace",
   "private": true,
   "type": "module",
+  "workspaces": [
+    "apps/usahp-control"
+  ],
   "scripts": {
+    "control:dev": "npm run tauri dev --workspace usahp-control",
+    "control:build": "npm run build --workspace usahp-control",
+    "control:tauri-build": "npm run tauri build --workspace usahp-control",
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",
     "docs:preview": "vitepress preview docs"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "2.11.4",
     "vitepress": "1.6.4"
   },
   "overrides": {

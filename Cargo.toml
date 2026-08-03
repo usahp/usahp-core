@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "apps/usahp-control/src-tauri",
     "crates/usahp-core",
     "crates/usahp-daemon",
     "crates/usahp-listen",

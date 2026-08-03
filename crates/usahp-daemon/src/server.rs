@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use futures_util::{SinkExt, StreamExt};
 use tokio::{
     net::{TcpListener, TcpStream},
-    sync::{mpsc, oneshot},
+    sync::{mpsc, oneshot, watch},
 };
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 use tracing::{debug, info, warn};
@@ -17,16 +17,38 @@ pub async fn serve(
     broker: mpsc::Sender<BrokerCommand>,
     queue_capacity: usize,
 ) -> Result<()> {
+    let (_running, receiver) = watch::channel(true);
+    serve_until_stopped(listener, broker, queue_capacity, receiver).await
+}
+
+pub async fn serve_until_stopped(
+    listener: TcpListener,
+    broker: mpsc::Sender<BrokerCommand>,
+    queue_capacity: usize,
+    mut running: watch::Receiver<bool>,
+) -> Result<()> {
     info!(address = %listener.local_addr()?, "WebSocket server listening");
     loop {
-        let (stream, peer) = listener.accept().await?;
+        let accepted = tokio::select! {
+            accepted = listener.accept() => Some(accepted?),
+            changed = running.changed() => {
+                if changed.is_err() || !*running.borrow() { None } else { continue }
+            }
+        };
+        let Some((stream, peer)) = accepted else {
+            break;
+        };
         let broker = broker.clone();
+        let client_running = running.clone();
         tokio::spawn(async move {
-            if let Err(error) = handle_client(stream, peer, broker, queue_capacity).await {
+            if let Err(error) =
+                handle_client(stream, peer, broker, queue_capacity, client_running).await
+            {
                 warn!(%peer, %error, "client connection ended with error");
             }
         });
     }
+    Ok(())
 }
 
 async fn handle_client(
@@ -34,6 +56,7 @@ async fn handle_client(
     peer: SocketAddr,
     broker: mpsc::Sender<BrokerCommand>,
     queue_capacity: usize,
+    mut running: watch::Receiver<bool>,
 ) -> Result<()> {
     let websocket = accept_async(stream)
         .await
@@ -42,7 +65,11 @@ async fn handle_client(
     let (sender, mut receiver) = mpsc::channel::<Arc<ServerMessage>>(queue_capacity);
     let (reply, registered) = oneshot::channel();
     broker
-        .send(BrokerCommand::Register { sender, reply })
+        .send(BrokerCommand::RegisterClient {
+            sender,
+            peer,
+            reply,
+        })
         .await
         .context("broker stopped")?;
     let client_id = registered.await.context("broker rejected registration")?;
@@ -50,6 +77,9 @@ async fn handle_client(
 
     loop {
         tokio::select! {
+            changed = running.changed() => {
+                if changed.is_err() || !*running.borrow() { break; }
+            }
             // Daemon → client: forward broker messages.
             msg = receiver.recv() => {
                 let Some(msg) = msg else { break; };
@@ -228,5 +258,34 @@ mod tests {
             ServerMessage::HandshakeResponse(HandshakeResponse::Accepted { .. })
         ));
         task.abort();
+    }
+
+    #[tokio::test]
+    async fn stopped_server_disconnects_clients_and_releases_listener() {
+        let mapping = Mapping {
+            id: "physical".into(),
+            switch_id: "switch_1".into(),
+            input: InputKind::Keyboard,
+            code: "Space".into(),
+            device: None,
+        };
+        let broker = broker::spawn(vec![mapping], crate::input::CaptureControl::default());
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (running, receiver) = watch::channel(true);
+        let task = tokio::spawn(serve_until_stopped(listener, broker, 8, receiver));
+        let (mut socket, _) = connect_async(format!("ws://{address}")).await.unwrap();
+        socket.next().await.unwrap().unwrap();
+
+        running.send(false).unwrap();
+        task.await.unwrap().unwrap();
+        let closed = timeout(Duration::from_secs(1), socket.next())
+            .await
+            .unwrap();
+        assert!(matches!(
+            closed,
+            None | Some(Err(_)) | Some(Ok(Message::Close(_)))
+        ));
+        TcpListener::bind(address).await.unwrap();
     }
 }

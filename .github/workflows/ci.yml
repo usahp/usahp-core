@@ -20,9 +20,19 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Install Linux input dependencies
+      - name: Install Linux input and Tauri dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libevdev-dev libudev-dev libx11-dev libxtst-dev
+        run: sudo apt-get update && sudo apt-get install -y libevdev-dev libudev-dev libx11-dev libxtst-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build USAHP Control frontend
+        run: npm run control:build
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -35,6 +45,9 @@ jobs:
 
       - name: Lint
         run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Build USAHP Control native app
+        run: cargo build -p usahp-control
 
       - name: Test
         run: cargo test --workspace

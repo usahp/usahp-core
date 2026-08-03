@@ -19,6 +19,7 @@ use core_graphics::event::{
     CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventType,
     CallbackResult,
 };
+use objc2_core_graphics::{CGPreflightListenEventAccess, CGRequestListenEventAccess};
 use tokio::sync::mpsc;
 use usahp_core::{Action, InputKind, Mapping};
 
@@ -26,6 +27,31 @@ use crate::broker::{BrokerCommand, PhysicalEvent};
 
 /// `kCGKeyboardEventKeycode`
 const KEYCODE_FIELD: u32 = 9;
+
+#[derive(Debug)]
+pub struct AccessibilityPermissionRequired;
+
+impl std::fmt::Display for AccessibilityPermissionRequired {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(
+            "macOS Accessibility permission is required for keyboard capture and suppression",
+        )
+    }
+}
+
+impl std::error::Error for AccessibilityPermissionRequired {}
+
+pub fn require_accessibility_permission() -> anyhow::Result<()> {
+    if CGPreflightListenEventAccess() {
+        Ok(())
+    } else {
+        Err(AccessibilityPermissionRequired.into())
+    }
+}
+
+pub fn request_accessibility_permission() -> bool {
+    CGRequestListenEventAccess()
+}
 
 /// usahp key-name → macOS virtual keycode (mirrors `parse_key`'s accepted names).
 fn name_to_keycode() -> HashMap<&'static str, u16> {
