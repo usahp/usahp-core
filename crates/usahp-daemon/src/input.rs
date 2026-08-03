@@ -1,9 +1,7 @@
 #[cfg(not(target_os = "macos"))]
 use std::collections::HashMap;
-use std::sync::Arc;
-#[cfg(target_os = "linux")]
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 #[cfg(target_os = "linux")]
 use std::time::Duration;
 
@@ -23,6 +21,7 @@ use usahp_core::{InputKind, Mapping};
 use crate::broker::BrokerCommand;
 #[cfg(not(target_os = "macos"))]
 use crate::broker::PhysicalEvent;
+use crate::management::{CaptureAvailability, CaptureStatus};
 
 #[cfg(target_os = "linux")]
 enum BackendCommand {
@@ -33,20 +32,26 @@ enum BackendCommand {
 #[derive(Clone)]
 pub struct CaptureControl {
     enabled: Arc<AtomicBool>,
+    availability: Arc<Mutex<(CaptureAvailability, Option<String>)>>,
     #[cfg(target_os = "linux")]
     backends: Arc<Mutex<Vec<std::sync::mpsc::Sender<BackendCommand>>>>,
     #[cfg(test)]
     fail_resume: Arc<AtomicBool>,
+    #[cfg(test)]
+    fail_pause: Arc<AtomicBool>,
 }
 
 impl CaptureControl {
     pub fn new_enabled() -> Self {
         Self {
             enabled: Arc::new(AtomicBool::new(true)),
+            availability: Arc::new(Mutex::new((CaptureAvailability::Available, None))),
             #[cfg(target_os = "linux")]
             backends: Arc::new(Mutex::new(Vec::new())),
             #[cfg(test)]
             fail_resume: Arc::new(AtomicBool::new(false)),
+            #[cfg(test)]
+            fail_pause: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -54,22 +59,46 @@ impl CaptureControl {
         self.enabled.load(Ordering::Acquire)
     }
 
+    pub fn status(&self) -> CaptureStatus {
+        let (availability, message) = self.availability.lock().unwrap().clone();
+        CaptureStatus {
+            active: self.enabled(),
+            availability,
+            message,
+        }
+    }
+
     pub async fn pause(&self) -> Result<()> {
         self.enabled.store(false, Ordering::Release);
-        self.command_backends(false).await
+        #[cfg(test)]
+        if self.fail_pause.load(Ordering::Acquire) {
+            return self.record_failure(anyhow::anyhow!("test capture pause failure"));
+        }
+        match self.command_backends(false).await {
+            Ok(()) => Ok(()),
+            Err(error) => self.record_failure(error),
+        }
     }
 
     pub async fn resume(&self) -> Result<()> {
+        self.enabled.store(false, Ordering::Release);
         #[cfg(test)]
         if self.fail_resume.load(Ordering::Acquire) {
-            bail!("test capture reacquisition failure");
+            return self.record_failure(anyhow::anyhow!("test capture reacquisition failure"));
         }
         if let Err(error) = self.command_backends(true).await {
             let _ = self.command_backends(false).await;
-            return Err(error);
+            return self.record_failure(error);
         }
         self.enabled.store(true, Ordering::Release);
+        *self.availability.lock().unwrap() = (CaptureAvailability::Available, None);
         Ok(())
+    }
+
+    fn record_failure<T>(&self, error: anyhow::Error) -> Result<T> {
+        *self.availability.lock().unwrap() =
+            (CaptureAvailability::Unavailable, Some(format!("{error:#}")));
+        Err(error)
     }
 
     async fn command_backends(&self, resume: bool) -> Result<()> {
@@ -123,6 +152,11 @@ impl CaptureControl {
     pub(crate) fn fail_resume_for_test(&self, fail: bool) {
         self.fail_resume.store(fail, Ordering::Release);
     }
+
+    #[cfg(test)]
+    pub(crate) fn fail_pause_for_test(&self, fail: bool) {
+        self.fail_pause.store(fail, Ordering::Release);
+    }
 }
 
 impl Default for CaptureControl {
@@ -172,6 +206,7 @@ fn spawn_keyboard(
     {
         // rdev::grab crashes on macOS (TSM off-main-thread → SIGTRAP). Use a
         // native CGEventTap that reads only keycodes — no TextServices.
+        crate::macos_keyboard::require_accessibility_permission()?;
         crate::macos_keyboard::spawn(&mappings, broker, capture);
         Ok(())
     }
@@ -448,5 +483,29 @@ mod tests {
         for code in ["Space", "Return", "Escape", "A", "Z", "LeftArrow"] {
             assert!(parse_key(code).is_ok(), "{code}");
         }
+    }
+
+    #[tokio::test]
+    async fn capture_status_tracks_pause_resume_and_failures() {
+        let capture = CaptureControl::default();
+        assert!(capture.status().active);
+        assert_eq!(
+            capture.status().availability,
+            CaptureAvailability::Available
+        );
+
+        capture.pause().await.unwrap();
+        assert!(!capture.status().active);
+        capture.resume().await.unwrap();
+        assert!(capture.status().active);
+
+        capture.fail_resume_for_test(true);
+        let error = capture.resume().await.unwrap_err();
+        assert!(error.to_string().contains("reacquisition"));
+        assert_eq!(
+            capture.status().availability,
+            CaptureAvailability::Unavailable
+        );
+        assert!(capture.status().message.is_some());
     }
 }

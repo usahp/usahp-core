@@ -13,9 +13,11 @@ npm run control:dev
 
 The dashboard opens on launch. Minimizing or closing the window hides it to the system tray; click the tray icon or choose **Open USAHP Control** to restore it.
 
-## Choose a configuration
+## First launch and configuration
 
-On first launch, choose a TOML file such as [`example.toml`](https://github.com/usahp/usahp-core/blob/main/example.toml). USAHP Control validates the mappings and suppression support before starting. It stores only the selected file path in the operating system's per-user application data directory.
+On first launch, USAHP Control copies an embedded configuration into the operating system's per-user application data directory, remembers its path, validates it, and starts automatically. The default maps **Space** and **Enter** to `switch_1`; while the service is running those keys are globally captured and suppressed. Use **Change Configuration** to select a different TOML file such as [`example.toml`](https://github.com/usahp/usahp-core/blob/main/example.toml).
+
+The generated file is never overwritten after creation. USAHP Control remembers only the selected file path and reports an error without replacing the file if it later becomes missing or invalid.
 
 Choosing another configuration while a service has already been loaded restarts USAHP Control. This allows platform input hooks and device grabs to be rebuilt cleanly with the new mappings.
 
@@ -47,8 +49,10 @@ Use one host at a time:
 - `usahp-control` is intended for interactive desktop use and owns the service in its tray process;
 - `usahpd` is the headless CLI host and requires an explicit `--config` path.
 
-Both expose the same loopback-only public protocol. The utility's management snapshots and commands are private in-process Rust APIs and are not available to WebSocket clients.
+Both expose the same loopback-only public protocol. `ServiceSupervisor` is the canonical way for a Rust host to own the broker lifecycle; migrating the separate Tauri demo and introducing optional capture transports remain follow-up work in [issue #15](https://github.com/usahp/usahp-core/issues/15). The utility's management snapshots and commands are private in-process Rust APIs and are not available to WebSocket clients.
 
 ## Platform notes
 
-The utility needs the same input permissions as the daemon. macOS requires Accessibility permission, Linux requires access to the configured input devices, and Windows security software may prompt for global input-hook access. Hosted CI can compile the tray application but cannot verify interactive permissions or real hardware suppression.
+The utility needs the same input permissions as the daemon. On macOS it detects missing Accessibility access and shows an explicit **Grant Accessibility Access** action; it never triggers the system prompt without that click. Linux requires access to the configured input devices, and Windows security software may prompt for global input-hook access. Hosted CI can compile the tray application but cannot verify interactive permissions or real hardware suppression.
+
+USAHP Control deliberately accepts loopback addresses only. Possible future capture transports in issue #15 do not relax the current WebSocket security boundary.

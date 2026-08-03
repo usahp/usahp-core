@@ -10,7 +10,9 @@ Protocol 0.2 does not accept Windows gamepad mappings because its backend cannot
 
 ## macOS
 
-Keyboard capture uses a native session `CGEventTap` that reads virtual keycodes without invoking macOS Text Services. Grant **Accessibility** permission to the terminal or packaged executable that runs `usahpd`:
+Keyboard capture uses a native session `CGEventTap` that reads virtual keycodes without invoking macOS Text Services. USAHP Control preflights this permission, reports `permission_required` rather than claiming capture is merely released, and offers a **Grant Accessibility Access** button. The button invokes the native macOS request; no prompt occurs before the user chooses it.
+
+For `usahpd`, grant **Accessibility** permission to the terminal or packaged executable that runs it:
 
 1. Open System Settings.
 2. Go to Privacy & Security → Accessibility.

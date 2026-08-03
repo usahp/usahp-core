@@ -3,6 +3,21 @@ use usahp_core::SwitchSnapshot;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+pub enum CaptureAvailability {
+    Available,
+    PermissionRequired,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct CaptureStatus {
+    pub active: bool,
+    pub availability: CaptureAvailability,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum RequestOutcome {
     Accepted,
     Rejected { reason: String },
@@ -29,8 +44,30 @@ pub struct ActiveSessionSnapshot {
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct BrokerSnapshot {
-    pub capture_enabled: bool,
+    pub capture: CaptureStatus,
     pub switches: Vec<SwitchSnapshot>,
     pub connections: Vec<ConnectionSnapshot>,
     pub active_session: Option<ActiveSessionSnapshot>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capture_status_serializes_as_an_in_process_management_shape() {
+        let status = CaptureStatus {
+            active: false,
+            availability: CaptureAvailability::PermissionRequired,
+            message: Some("grant Accessibility".into()),
+        };
+        assert_eq!(
+            serde_json::to_value(status).unwrap(),
+            serde_json::json!({
+                "active": false,
+                "availability": "permission_required",
+                "message": "grant Accessibility"
+            })
+        );
+    }
 }

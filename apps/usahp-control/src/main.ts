@@ -20,12 +20,17 @@ type Session = {
   requested_mode: string;
   session_id: string;
 };
+type CaptureStatus = {
+  active: boolean;
+  availability: 'available' | 'permission_required' | 'unavailable';
+  message: string | null;
+};
 type Snapshot = {
   configured: boolean;
   phase: Phase;
   config_path: string | null;
   address: string | null;
-  capture_enabled: boolean;
+  capture: CaptureStatus;
   switches: Array<{ switch_id: string; state: string; confidence?: number }>;
   connections: Connection[];
   active_session: Session | null;
@@ -37,9 +42,10 @@ app.innerHTML = `
   <header><div class="brand"><span class="mark" aria-hidden="true"></span><div><h1>USAHP Control</h1><p>Local switch service</p></div></div><span id="status" class="badge">Loading</span></header>
   <main>
     <section class="hero card"><div><p class="eyebrow">Service</p><h2 id="phase">Loading…</h2><p id="summary">Reading service state.</p></div><div class="actions"><button id="start">Start service</button><button id="stop" class="secondary">Stop service</button></div></section>
+    <section id="permission-card" class="warning card" hidden><strong>macOS Accessibility permission required</strong><p>USAHP cannot capture or suppress configured keys until access is granted. macOS may ask you to enable USAHP Control in System Settings.</p><button id="grant-permission">Grant Accessibility Access</button></section>
     <section id="error-card" class="error card" hidden><strong>Service error</strong><p id="error"></p></section>
     <div class="grid">
-      <section class="card"><div class="section-title"><h2>Configuration</h2><button id="config" class="text">Choose file</button></div><dl><dt>File</dt><dd id="config-path">Not selected</dd><dt>WebSocket</dt><dd id="address">—</dd><dt>Capture</dt><dd id="capture">—</dd></dl></section>
+      <section class="card"><div class="section-title"><h2>Configuration</h2><button id="config" class="text">Choose file</button></div><dl><dt>File</dt><dd id="config-path">Not selected</dd><dt>WebSocket</dt><dd id="address">—</dd><dt>Capture</dt><dd id="capture">—</dd></dl><p class="notice">On first launch, USAHP creates and starts a default configuration that globally captures and suppresses Space and Enter while the service is running.</p></section>
       <section class="card"><h2>Active owner</h2><div id="session" class="empty">No managed session</div></section>
     </div>
     <section class="card"><div class="section-title"><h2>Connected applications</h2><span id="connection-count" class="count">0</span></div><div id="connections" class="empty">No clients connected</div></section>
@@ -72,11 +78,18 @@ function render(snapshot: Snapshot) {
   $('#summary').textContent = snapshot.configured ? (snapshot.phase === 'running' ? `Listening on ${snapshot.address}` : 'The tray utility remains available while the service is stopped.') : 'Choose a TOML configuration to start USAHP.';
   $('#config-path').textContent = snapshot.config_path ?? 'Not selected';
   $('#address').textContent = snapshot.address ?? '—';
-  $('#capture').textContent = snapshot.capture_enabled ? 'Capturing configured inputs' : 'Released to the operating system';
+  const captureLabels: Record<CaptureStatus['availability'], string> = {
+    available: snapshot.capture.active ? 'Capturing configured inputs' : 'Released to the operating system',
+    permission_required: 'Accessibility permission required',
+    unavailable: snapshot.capture.message ? `Unavailable — ${snapshot.capture.message}` : 'Unavailable',
+  };
+  $('#capture').textContent = captureLabels[snapshot.capture.availability];
   $('#start').toggleAttribute('disabled', !snapshot.configured || snapshot.phase === 'running' || snapshot.phase === 'starting');
   $('#stop').toggleAttribute('disabled', snapshot.phase !== 'running');
+  const permissionRequired = snapshot.capture.availability === 'permission_required';
+  $('#permission-card').toggleAttribute('hidden', !permissionRequired);
   const errorCard = $('#error-card');
-  errorCard.toggleAttribute('hidden', !snapshot.error);
+  errorCard.toggleAttribute('hidden', !snapshot.error || permissionRequired);
   $('#error').textContent = snapshot.error ?? '';
 
   $('#connection-count').textContent = String(snapshot.connections.length);
@@ -122,6 +135,16 @@ async function perform(action: 'stop' | 'quit') {
 $('#start').addEventListener('click', async () => { await invoke('start_service'); await refresh(); });
 $('#stop').addEventListener('click', () => requestAction('stop'));
 $('#config').addEventListener('click', () => void chooseConfig());
+$('#grant-permission').addEventListener('click', async () => {
+  try {
+    const granted = await invoke<boolean>('grant_capture_permission');
+    await refresh();
+    if (!granted) $('#summary').textContent = 'Enable USAHP Control in System Settings, then select Grant Accessibility Access again.';
+  } catch (error) {
+    await refresh();
+    $('#summary').textContent = String(error);
+  }
+});
 $('#quit').addEventListener('click', () => requestAction('quit'));
 $('#confirm').addEventListener('close', () => { const dialog = $('#confirm') as HTMLDialogElement; if (dialog.returnValue === 'confirm' && pendingAction) void perform(pendingAction); pendingAction = null; });
 void listen<'stop' | 'quit'>('confirm-service-action', ({ payload }) => requestAction(payload));

@@ -109,7 +109,7 @@ pub fn spawn(mappings: Vec<Mapping>, capture: CaptureControl) -> mpsc::Sender<Br
 pub fn spawn_managed(mappings: Vec<Mapping>, capture: CaptureControl) -> BrokerHandle {
     let (sender, receiver) = mpsc::channel(1024);
     let (snapshots, receiver_snapshots) = watch::channel(BrokerSnapshot {
-        capture_enabled: capture.enabled(),
+        capture: capture.status(),
         switches: SwitchStateMachine::new(&mappings).snapshots(),
         connections: Vec::new(),
         active_session: None,
@@ -505,6 +505,7 @@ impl Runtime {
     }
 
     async fn set_running(&mut self, running: bool) -> anyhow::Result<()> {
+        let mut capture_error = None;
         if running {
             self.capture.resume().await?;
             self.paused = false;
@@ -513,7 +514,9 @@ impl Runtime {
                 self.revoke(SessionRevocationReason::ExplicitRevocation)
                     .await;
             } else {
-                self.capture.pause().await?;
+                if let Err(error) = self.capture.pause().await {
+                    capture_error = Some(error);
+                }
                 self.paused = true;
                 let releases = self.release_messages();
                 for release in releases {
@@ -524,7 +527,7 @@ impl Runtime {
             self.escape_tracker.clear();
         }
         self.publish_snapshot();
-        Ok(())
+        capture_error.map_or(Ok(()), Err)
     }
 
     fn publish_snapshot(&self) {
@@ -549,7 +552,7 @@ impl Runtime {
             session_id: session.session_id.clone(),
         });
         self.snapshots.send_replace(BrokerSnapshot {
-            capture_enabled: self.capture.enabled(),
+            capture: self.capture.status(),
             switches: self.state.snapshots(),
             connections,
             active_session,
@@ -1347,5 +1350,54 @@ mod tests {
             .unwrap();
         result.await.unwrap().unwrap();
         assert!(capture.enabled());
+    }
+
+    #[tokio::test]
+    async fn stop_failure_still_releases_many_to_one_state_and_clears_clients() {
+        let capture = CaptureControl::default();
+        let handle = spawn_managed(
+            vec![mapping("a", "switch_1"), mapping("b", "switch_1")],
+            capture.clone(),
+        );
+        let broker = handle.commands;
+        let snapshots = handle.snapshots;
+        let (_client_id, mut rx) = register(&broker, 8).await;
+        rx.recv().await.unwrap();
+        for mapping_id in ["a", "b"] {
+            broker
+                .send(BrokerCommand::Input(PhysicalEvent {
+                    mapping_id: mapping_id.into(),
+                    action: Action::Pressed,
+                    confidence: Some(100.0),
+                }))
+                .await
+                .unwrap();
+        }
+        rx.recv().await.unwrap();
+        assert_eq!(snapshots.borrow().switches[0].state, SwitchState::Pressed);
+
+        capture.fail_pause_for_test(true);
+        let (reply, result) = oneshot::channel();
+        broker
+            .send(BrokerCommand::SetRunning {
+                running: false,
+                reply,
+            })
+            .await
+            .unwrap();
+        let error = result.await.unwrap().unwrap_err();
+
+        assert!(error.contains("test capture pause failure"));
+        assert!(!capture.enabled());
+        assert!(snapshots.borrow().connections.is_empty());
+        assert_eq!(snapshots.borrow().switches[0].state, SwitchState::Released);
+        assert_eq!(
+            snapshots.borrow().capture.availability,
+            crate::management::CaptureAvailability::Unavailable
+        );
+        assert!(matches!(
+            &*rx.recv().await.unwrap(),
+            ServerMessage::SwitchEvent(event) if event.action == Action::Released
+        ));
     }
 }

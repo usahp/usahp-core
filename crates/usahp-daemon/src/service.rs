@@ -15,7 +15,7 @@ use usahp_core::Config;
 use crate::{
     broker::{self, BrokerCommand},
     input::{self, CaptureControl},
-    management::{ActiveSessionSnapshot, ConnectionSnapshot},
+    management::{ActiveSessionSnapshot, CaptureStatus, ConnectionSnapshot},
     server,
 };
 
@@ -34,7 +34,7 @@ pub struct ServiceSnapshot {
     pub phase: ServicePhase,
     pub config_path: String,
     pub address: String,
-    pub capture_enabled: bool,
+    pub capture: CaptureStatus,
     pub switches: Vec<usahp_core::SwitchSnapshot>,
     pub connections: Vec<ConnectionSnapshot>,
     pub active_session: Option<ActiveSessionSnapshot>,
@@ -164,7 +164,7 @@ impl ServiceSupervisor {
                 self.config.server.address().0,
                 self.config.server.address().1
             ),
-            capture_enabled: broker.capture_enabled,
+            capture: broker.capture,
             switches: broker.switches,
             connections: broker.connections,
             active_session: broker.active_session,
@@ -227,6 +227,31 @@ pub fn ensure_loopback(config: &Config) -> Result<()> {
     Ok(())
 }
 
+pub fn is_capture_permission_required(error: &anyhow::Error) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        error
+            .chain()
+            .any(|cause| cause.is::<crate::macos_keyboard::AccessibilityPermissionRequired>())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = error;
+        false
+    }
+}
+
+pub fn request_capture_permission() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        crate::macos_keyboard::request_accessibility_permission()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -266,5 +291,13 @@ code = "Space"
         std::fs::write(&invalid, "mappings = []").unwrap();
         assert!(validate_config(&invalid).is_err());
         std::fs::remove_file(invalid).unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn recognises_typed_accessibility_permission_errors() {
+        let error = anyhow::Error::new(crate::macos_keyboard::AccessibilityPermissionRequired)
+            .context("could not start keyboard capture");
+        assert!(is_capture_permission_required(&error));
     }
 }
