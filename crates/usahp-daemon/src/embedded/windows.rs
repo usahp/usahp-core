@@ -1,10 +1,18 @@
 use super::Driver;
 use anyhow::{Result, bail};
-use std::{cell::RefCell, sync::mpsc, time::Duration};
+use std::{
+    cell::RefCell,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
+    time::Duration,
+};
 use windows_sys::Win32::{
     Foundation::*,
     System::{LibraryLoader::GetModuleHandleW, Threading::GetCurrentThreadId},
-    UI::WindowsAndMessaging::*,
+    UI::{Input::KeyboardAndMouse::GetAsyncKeyState, WindowsAndMessaging::*},
 };
 thread_local! {static DRIVER:RefCell<Option<Driver>>=const{RefCell::new(None)};}
 pub fn code_for_name(name: &str) -> Option<u32> {
@@ -88,11 +96,14 @@ unsafe extern "system" fn hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRE
     unsafe { CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam) }
 }
 pub struct Capture {
+    stop: Arc<AtomicBool>,
     thread_id: u32,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 impl Capture {
     pub fn start(driver: Driver) -> Result<Self> {
+        let stop = Arc::new(AtomicBool::new(false));
+        let stopping = stop.clone();
         let (tx, rx) = mpsc::sync_channel(1);
         let thread = std::thread::Builder::new()
             .name("usahp-embedded-hook".into())
@@ -115,12 +126,20 @@ impl Capture {
                     let _ = tx.send(Err(std::io::Error::last_os_error().to_string()));
                     return;
                 }
+                for code in 0..=255 {
+                    if GetAsyncKeyState(code) < 0 {
+                        if let Some(name) = name_for_code(code as u32) {
+                            driver.key(&name, true);
+                        }
+                    }
+                }
+                driver.ready();
                 if tx.send(Ok(thread_id)).is_ok() {
                     let mut msg = std::mem::zeroed();
-                    loop {
+                    while !stopping.load(Ordering::Acquire) {
                         let result = GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0);
                         if result <= 0 {
-                            if result < 0 {
+                            if !stopping.load(Ordering::Acquire) {
                                 driver.lost();
                             }
                             break;
@@ -139,6 +158,7 @@ impl Capture {
             })?;
         match rx.recv_timeout(Duration::from_secs(3)) {
             Ok(Ok(thread_id)) => Ok(Self {
+                stop,
                 thread_id,
                 thread: Some(thread),
             }),
@@ -146,12 +166,16 @@ impl Capture {
                 let _ = thread.join();
                 bail!("Windows switch capture could not start: {message}");
             }
-            Err(_) => bail!("Windows switch capture did not acknowledge startup."),
+            Err(_) => {
+                stop.store(true, Ordering::Release);
+                bail!("Windows switch capture did not acknowledge startup.");
+            }
         }
     }
 }
 impl Drop for Capture {
     fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
         unsafe {
             PostThreadMessageW(self.thread_id, WM_QUIT, 0, 0);
         }

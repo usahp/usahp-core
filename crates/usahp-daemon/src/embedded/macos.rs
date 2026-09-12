@@ -13,6 +13,10 @@ use std::{
     },
     time::Duration,
 };
+#[link(name = "CoreGraphics", kind = "framework")]
+unsafe extern "C" {
+    fn CGEventSourceKeyState(state: i32, key: u16) -> bool;
+}
 const CODES: &[(&str, u16)] = &[
     ("Space", 49),
     ("Enter", 36),
@@ -121,6 +125,10 @@ impl Capture {
                         CallbackResult::Keep
                     },
                     || {
+                        for (name, code) in CODES {
+                            if unsafe { CGEventSourceKeyState(1, *code) } { driver.key(name, true); }
+                        }
+                        driver.ready();
                         if tx.send(Ok(())).is_err() {
                             return;
                         }
@@ -138,7 +146,7 @@ impl Capture {
                 );
                 if installed.is_err() {
                     let _ = tx.send(Err(
-                        "Grant Accessibility permission to Switchify PC before enabling switches."
+                        "Grant Accessibility permission to the host application before enabling switches."
                             .to_string(),
                     ));
                 }

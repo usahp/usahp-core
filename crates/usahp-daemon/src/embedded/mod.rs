@@ -58,6 +58,7 @@ pub struct Status {
 #[cfg_attr(not(any(target_os = "windows", target_os = "macos")), allow(dead_code))]
 struct Core {
     status: Status,
+    native_lost: bool,
     mappings: HashMap<String, String>,
     logical: SwitchStateMachine,
     physical: HashSet<String>,
@@ -76,6 +77,7 @@ impl Default for Core {
                 mode: Mode::Off,
                 reason: None,
             },
+            native_lost: false,
             mappings: HashMap::new(),
             logical: SwitchStateMachine::new(&[]),
             physical: HashSet::new(),
@@ -161,19 +163,25 @@ impl Core {
         }
         if self.status.mode == Mode::Learning {
             if pressed {
-                self.physical.insert(code.into());
-                if self.learned.is_none() && !was_down {
-                    self.learned = Some(code.into());
-                    self.physical.insert(code.into());
+                if was_down {
+                    return self.physical.contains(code);
                 }
-            } else if self.learned.as_deref() == Some(code) {
-                self.physical.remove(code);
-                self.status.mode = Mode::Off;
-                self.learned = None;
-                self.emit(Event::Learned {
-                    generation: self.status.generation,
-                    code: code.into(),
-                });
+                self.physical.insert(code.into());
+                if self.learned.is_none() {
+                    self.learned = Some(code.into());
+                }
+            } else {
+                if !self.physical.remove(code) {
+                    return false;
+                }
+                if self.learned.as_deref() == Some(code) {
+                    self.status.mode = Mode::Off;
+                    self.learned = None;
+                    self.emit(Event::Learned {
+                        generation: self.status.generation,
+                        code: code.into(),
+                    });
+                }
             }
             return true;
         }
@@ -182,13 +190,13 @@ impl Core {
         };
         if pressed {
             if was_down {
-                return true;
+                return self.physical.contains(code);
             }
             if !self.physical.insert(code.into()) {
                 return true;
             }
         } else if !self.physical.remove(code) {
-            return true;
+            return false;
         }
         let action = if pressed {
             Action::Pressed
@@ -238,10 +246,15 @@ impl Driver {
             .tick(self.now());
     }
     fn lost(&self) {
+        let mut core = self.core.lock().unwrap_or_else(|p| p.into_inner());
+        core.native_lost = true;
+        core.stop(StopReason::CaptureLost);
+    }
+    fn ready(&self) {
         self.core
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .stop(StopReason::CaptureLost);
+            .native_lost = false;
     }
 }
 /// One owner per process. Creation does not install hooks or capture input.
@@ -321,7 +334,13 @@ impl EmbeddedBroker {
     }
     fn ensure_native(&mut self) -> Result<()> {
         #[cfg(any(target_os = "windows", target_os = "macos"))]
-        if self.status().reason == Some(StopReason::CaptureLost) {
+        if self
+            .driver
+            .core
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .native_lost
+        {
             self.native.take();
         }
         #[cfg(target_os = "windows")]
@@ -349,7 +368,7 @@ impl EmbeddedBroker {
         }
         self.ensure_native()?;
         let mut core = self.driver.core.lock().unwrap_or_else(|p| p.into_inner());
-        if !core.physical.is_empty() {
+        if !core.physical.is_empty() || !core.down.is_empty() {
             bail!("Release the held switch before starting capture.");
         }
         core.begin(mode, self.driver.now());
@@ -427,7 +446,7 @@ mod tests {
     #[test]
     fn repeat_and_unmatched_release_never_activate() {
         let mut c = core();
-        assert!(c.key("Space", false, 0));
+        assert!(!c.key("Space", false, 0));
         assert!(c.events.is_empty());
         c.key("Space", true, 1);
         c.key("Space", true, 2);
@@ -484,6 +503,39 @@ mod tests {
         assert_eq!(c.status.reason, Some(StopReason::QueueOverflow));
         assert_eq!(c.events.len(), 1);
         assert!(matches!(c.events[0], Event::Stopped { .. }));
+    }
+    #[test]
+    fn learning_drains_overlapping_keys() {
+        let mut c = Core::default();
+        c.begin(Mode::Learning, 0);
+        for (code, down) in [("A", true), ("B", true), ("B", false), ("A", false)] {
+            assert!(c.key(code, down, 1));
+        }
+        assert!(c.physical.is_empty());
+        assert!(c.down.is_empty());
+        assert!(matches!(c.events.front(),Some(Event::Learned{code,..}) if code=="A"));
+    }
+    #[test]
+    fn prior_passed_press_retains_passed_release() {
+        let mut c = core();
+        c.stop(StopReason::Disabled);
+        assert!(!c.key("Space", true, 1));
+        c.begin(Mode::Active, 2);
+        assert!(!c.key("Space", true, 3));
+        assert!(!c.key("Space", false, 4));
+        assert!(c.events.is_empty());
+    }
+    #[test]
+    fn cleanup_does_not_erase_native_failure() {
+        let driver = Driver {
+            core: Arc::new(Mutex::new(Core::default())),
+            started: Instant::now(),
+        };
+        driver.lost();
+        driver.core.lock().unwrap().stop(StopReason::Disabled);
+        assert!(driver.core.lock().unwrap().native_lost);
+        driver.ready();
+        assert!(!driver.core.lock().unwrap().native_lost);
     }
     #[test]
     fn generations_change_and_names_are_stable() {
