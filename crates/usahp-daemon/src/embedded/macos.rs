@@ -118,7 +118,7 @@ impl Capture {
                         }
                         let code = event.get_integer_value_field(9) as u16;
                         if let Some((name, _)) = CODES.iter().find(|(_, c)| *c == code) {
-                            if events.key(name, kind == CGEventType::KeyDown) {
+                            if events.key(name, matches!(kind, CGEventType::KeyDown)) {
                                 return CallbackResult::Drop;
                             }
                         }
