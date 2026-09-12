@@ -1190,6 +1190,7 @@ dependencies = [
  "tracing-subscriber",
  "usahp-core",
  "uuid",
+ "windows-sys",
 ]
 
 [[package]]
