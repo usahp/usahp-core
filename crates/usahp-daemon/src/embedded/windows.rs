@@ -126,14 +126,15 @@ impl Capture {
                     let _ = tx.send(Err(std::io::Error::last_os_error().to_string()));
                     return;
                 }
+                let mut down = std::collections::HashSet::new();
                 for code in 0..=255 {
                     if GetAsyncKeyState(code) < 0 {
                         if let Some(name) = name_for_code(code as u32) {
-                            driver.key(&name, true);
+                            down.insert(name);
                         }
                     }
                 }
-                driver.ready();
+                driver.ready(down);
                 if tx.send(Ok(thread_id)).is_ok() {
                     let mut msg = std::mem::zeroed();
                     while !stopping.load(Ordering::Acquire) {

@@ -125,10 +125,11 @@ impl Capture {
                         CallbackResult::Keep
                     },
                     || {
+                        let mut down = std::collections::HashSet::new();
                         for (name, code) in CODES {
-                            if unsafe { CGEventSourceKeyState(1, *code) } { driver.key(name, true); }
+                            if unsafe { CGEventSourceKeyState(1, *code) } { down.insert((*name).to_string()); }
                         }
-                        driver.ready();
+                        driver.ready(down);
                         if tx.send(Ok(())).is_err() {
                             return;
                         }

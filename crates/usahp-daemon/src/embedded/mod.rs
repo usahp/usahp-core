@@ -250,11 +250,11 @@ impl Driver {
         core.native_lost = true;
         core.stop(StopReason::CaptureLost);
     }
-    fn ready(&self) {
-        self.core
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .native_lost = false;
+    fn ready(&self, down: HashSet<String>) {
+        let mut core = self.core.lock().unwrap_or_else(|p| p.into_inner());
+        core.physical.retain(|key| down.contains(key));
+        core.down = down;
+        core.native_lost = false;
     }
 }
 /// One owner per process. Creation does not install hooks or capture input.
@@ -368,6 +368,9 @@ impl EmbeddedBroker {
         }
         self.ensure_native()?;
         let mut core = self.driver.core.lock().unwrap_or_else(|p| p.into_inner());
+        if core.native_lost {
+            bail!("Native switch capture was lost during startup.");
+        }
         if !core.physical.is_empty() || !core.down.is_empty() {
             bail!("Release the held switch before starting capture.");
         }
@@ -531,11 +534,15 @@ mod tests {
             core: Arc::new(Mutex::new(Core::default())),
             started: Instant::now(),
         };
+        driver.core.lock().unwrap().begin(Mode::Learning, 0);
+        driver.key("Space", true);
         driver.lost();
         driver.core.lock().unwrap().stop(StopReason::Disabled);
         assert!(driver.core.lock().unwrap().native_lost);
-        driver.ready();
+        driver.ready(HashSet::new());
         assert!(!driver.core.lock().unwrap().native_lost);
+        assert!(driver.core.lock().unwrap().down.is_empty());
+        assert!(driver.core.lock().unwrap().physical.is_empty());
     }
     #[test]
     fn generations_change_and_names_are_stable() {
