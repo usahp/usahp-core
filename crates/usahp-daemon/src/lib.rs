@@ -7,3 +7,6 @@ pub mod simulator;
 pub mod focus_watcher;
 #[cfg(target_os = "macos")]
 mod macos_keyboard;
+
+/// Managed in-process keyboard capture for desktop accessibility clients.
+pub mod embedded;
